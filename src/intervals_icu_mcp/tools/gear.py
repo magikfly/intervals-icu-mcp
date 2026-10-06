@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 from fastmcp import Context
 
-from ..auth import load_config, validate_credentials
+from ..auth import ICUConfig, load_config, validate_credentials
 from ..client import ICUAPIError, ICUClient
 from ..response_builder import ResponseBuilder
 
@@ -30,7 +30,8 @@ async def get_gear_list(
     ctx: Context | None = None,
 ) -> str:
     """List all gear items with usage stats (distance, time, activity count) and maintenance reminders."""
-    config = load_config()
+    config: ICUConfig = await ctx.get_state("config") if ctx else load_config()
+    config = config or load_config()
     if not validate_credentials(config):
         return (
             "Error: Intervals.icu credentials not configured. Run intervals-icu-mcp-auth to set up."
@@ -137,7 +138,8 @@ async def create_gear(
     ctx: Context | None = None,
 ) -> str:
     """Create a new gear item for tracking equipment usage and maintenance (bikes, shoes, trainers, etc.)."""
-    config = load_config()
+    config: ICUConfig = await ctx.get_state("config") if ctx else load_config()
+    config = config or load_config()
     if not validate_credentials(config):
         return (
             "Error: Intervals.icu credentials not configured. Run intervals-icu-mcp-auth to set up."
@@ -191,7 +193,8 @@ async def update_gear(
     ctx: Context | None = None,
 ) -> str:
     """Update an existing gear item. Only fields you pass are sent."""
-    config = load_config()
+    config: ICUConfig = await ctx.get_state("config") if ctx else load_config()
+    config = config or load_config()
     if not validate_credentials(config):
         return (
             "Error: Intervals.icu credentials not configured. Run intervals-icu-mcp-auth to set up."
@@ -268,7 +271,8 @@ async def delete_gear(
     ctx: Context | None = None,
 ) -> str:
     """Permanently delete a gear item and its maintenance reminders. Activities that used this gear are not affected."""
-    config = load_config()
+    config: ICUConfig = await ctx.get_state("config") if ctx else load_config()
+    config = config or load_config()
     if not validate_credentials(config):
         return (
             "Error: Intervals.icu credentials not configured. Run intervals-icu-mcp-auth to set up."
@@ -300,7 +304,8 @@ async def create_gear_reminder(
     ctx: Context | None = None,
 ) -> str:
     """Create a maintenance reminder for a gear item, triggered by distance, time, or both."""
-    config = load_config()
+    config: ICUConfig = await ctx.get_state("config") if ctx else load_config()
+    config = config or load_config()
     if not validate_credentials(config):
         return (
             "Error: Intervals.icu credentials not configured. Run intervals-icu-mcp-auth to set up."
@@ -368,7 +373,8 @@ async def update_gear_reminder(
     ctx: Context | None = None,
 ) -> str:
     """Update an existing gear maintenance reminder. Only fields you pass are sent."""
-    config = load_config()
+    config: ICUConfig = await ctx.get_state("config") if ctx else load_config()
+    config = config or load_config()
     if not validate_credentials(config):
         return (
             "Error: Intervals.icu credentials not configured. Run intervals-icu-mcp-auth to set up."

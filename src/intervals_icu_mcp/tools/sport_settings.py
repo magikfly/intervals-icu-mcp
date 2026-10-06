@@ -4,7 +4,7 @@ from typing import Annotated, Any
 
 from fastmcp import Context
 
-from ..auth import load_config, validate_credentials
+from ..auth import ICUConfig, load_config, validate_credentials
 from ..client import ICUAPIError, ICUClient
 from ..response_builder import ResponseBuilder
 from ..sport_settings_format import (
@@ -29,7 +29,8 @@ async def get_sport_settings(
     so time-in-zone, HRSS and TSS are all computed from these — reasoning about zones from any other number puts the
     answer at odds with the athlete's own charts. Zones are not derived from curve data.
     """
-    config = load_config()
+    config: ICUConfig = await ctx.get_state("config") if ctx else load_config()
+    config = config or load_config()
     if not validate_credentials(config):
         return (
             "Error: Intervals.icu credentials not configured. Run intervals-icu-mcp-auth to set up."
@@ -107,7 +108,8 @@ async def update_sport_settings(
     Explicit zones replace the threshold-derived ones (e.g. to match a lab test).
     Changes apply from now on; past activities keep the zones they were analysed with.
     """
-    config = load_config()
+    config: ICUConfig = await ctx.get_state("config") if ctx else load_config()
+    config = config or load_config()
     if not validate_credentials(config):
         return (
             "Error: Intervals.icu credentials not configured. Run intervals-icu-mcp-auth to set up."
@@ -184,7 +186,8 @@ async def apply_sport_settings(
     wrong settings across the whole history. For selected activities or a date range, tell
     the user to use Update zones in the Intervals.icu activity list view (not in the API).
     """
-    config = load_config()
+    config: ICUConfig = await ctx.get_state("config") if ctx else load_config()
+    config = config or load_config()
     if not validate_credentials(config):
         return (
             "Error: Intervals.icu credentials not configured. Run intervals-icu-mcp-auth to set up."
@@ -225,7 +228,8 @@ async def create_sport_settings(
     ctx: Context | None = None,
 ) -> str:
     """Create a per-sport threshold record with outdoor/indoor FTP, FTHR, pace, or swim settings."""
-    config = load_config()
+    config: ICUConfig = await ctx.get_state("config") if ctx else load_config()
+    config = config or load_config()
     if not validate_credentials(config):
         return (
             "Error: Intervals.icu credentials not configured. Run intervals-icu-mcp-auth to set up."
@@ -266,7 +270,8 @@ async def delete_sport_settings(
     ctx: Context | None = None,
 ) -> str:
     """Permanently delete a per-sport threshold record. Destructive — re-creating it starts from defaults, not the deleted values; only registered when INTERVALS_ICU_DELETE_MODE=full."""
-    config = load_config()
+    config: ICUConfig = await ctx.get_state("config") if ctx else load_config()
+    config = config or load_config()
     if not validate_credentials(config):
         return (
             "Error: Intervals.icu credentials not configured. Run intervals-icu-mcp-auth to set up."

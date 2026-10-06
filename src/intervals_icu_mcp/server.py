@@ -768,7 +768,10 @@ async def athlete_profile_resource() -> str:
     from .sport_settings_format import format_sport_settings_entry
 
     # Load config directly since resources don't go through middleware
-    config = load_config()
+    from .auth import ICUConfig
+    from .middleware import resolve_config
+
+    config = resolve_config(load_config())
 
     try:
         async with ICUClient(config) as client:
