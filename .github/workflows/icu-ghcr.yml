@@ -120,7 +120,7 @@ jobs:
           # exercised against the live container by verify_mcp.py post-deploy.
           docker buildx build --load --platform linux/amd64 \
             --build-arg PKG_VERSION="$PKG_VERSION" -t icu-smoke .
-          docker run -d --name icu-smoke icu-smoke \
+          docker run -d --name icu-smoke -p 127.0.0.1:8000:8000 icu-smoke \
             --transport http --host 0.0.0.0 --port 8000
           for i in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/mcp || true)
