@@ -1,0 +1,162 @@
+name: Build and publish container image
+
+on:
+  schedule:
+    - cron: "0 1 * * *" # daily 01:00 UTC: merges any new upstream release into main, finishes well before the 04:00 Europe/Amsterdam Watchtower poll (Strata 00:00, mnemory 00:30)
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream intervals-icu-mcp release tag to merge/build (blank selects newest)"
+        required: false
+        type: string
+        default: ""
+      rebuild:
+        description: "Rebuild even if this release tag is already published"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: icu-ghcr-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      IMAGE: ghcr.io/magikfly/intervals-icu-mcp
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge newest upstream release into this branch
+        id: upstream
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "intervals-mcp-ci"
+          git config user.email "intervals-mcp-ci@users.noreply.github.com"
+          git remote add upstream https://github.com/hhopke/intervals-icu-mcp.git
+          git fetch --quiet --tags upstream
+          releases() { grep -E '^v[0-9]+(\.[0-9]+)*$'; }
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            TARGET="$REQUESTED_TAG"
+          else
+            TARGET="$(git ls-remote --tags --refs upstream 'refs/tags/v*' \
+              | awk '{ sub("refs/tags/", "", $2); print $2 }' | releases | sort -V | tail -n 1)"
+          fi
+          [[ "$TARGET" =~ ^v[0-9]+([.][0-9]+)*([.-][0-9A-Za-z.-]+)?$ ]] \
+            || { echo "Invalid release tag: $TARGET" >&2; exit 1; }
+          echo "Newest upstream release: $TARGET"
+          if ! git merge-base --is-ancestor "refs/tags/$TARGET" HEAD; then
+            echo "Merging upstream $TARGET into the patched branch"
+            if ! git merge --no-edit "refs/tags/$TARGET"; then
+              git merge --abort 2>/dev/null || true
+              echo "::error title=Upstream merge conflict::upstream $TARGET conflicts with the multi-tenant patch (middleware.py, server.py, gear.py, sport_settings.py - see commit 6528502). Merge $TARGET into main by hand, push, and rerun. The last good image stays deployed."
+              exit 1
+            fi
+            git push origin "HEAD:refs/heads/main"
+          else
+            echo "$TARGET is already merged; nothing new from upstream"
+          fi
+          echo "version=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "pkg_version=${TARGET#v}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Check multi-tenant patch is intact
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same invariants deploy.sh gates locally: per-request config must flow
+          # through the middleware, and every tool body must read it via ctx.get_state.
+          grep -q "def resolve_config" src/intervals_icu_mcp/middleware.py
+          test "$(grep -c ctx.get_state src/intervals_icu_mcp/tools/*.py | awk -F: '{s+=$2} END {print s}')" -ge 11
+          echo "patch gate ok"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if this release is already published
+        id: published
+        env:
+          FORCE_REBUILD: ${{ inputs.rebuild }}
+        shell: bash
+        run: |
+          if [[ "$FORCE_REBUILD" != "true" ]] && docker manifest inspect "$IMAGE:${{ steps.upstream.outputs.version }}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "$IMAGE:${{ steps.upstream.outputs.version }} already exists."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.published.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Smoke-test the built image before publishing
+        if: steps.published.outputs.skip != 'true'
+        env:
+          PKG_VERSION: ${{ steps.upstream.outputs.pkg_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Load-only build (no push): boots the real entrypoint with NO API key
+          # in env, exactly like the production container (multi-tenant: keys
+          # arrive per-request as x-api-key headers). Boot + /mcp 406 proves
+          # packaging and runtime layout; header-based tenant resolution is
+          # exercised against the live container by verify_mcp.py post-deploy.
+          docker buildx build --load --platform linux/amd64 \
+            --build-arg PKG_VERSION="$PKG_VERSION" -t icu-smoke .
+          docker run -d --name icu-smoke icu-smoke \
+            --transport http --host 0.0.0.0 --port 8000
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/mcp || true)
+            [ "$code" = "406" ] && break
+            sleep 1
+          done
+          echo "smoke /mcp http $code (406 = alive)"
+          [ "$code" = "406" ]
+          docker rm -f icu-smoke
+
+      - name: Build and publish GHCR tags
+        if: steps.published.outputs.skip != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          provenance: false
+          build-args: |
+            PKG_VERSION=${{ steps.upstream.outputs.pkg_version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/magikfly/intervals-icu-mcp
+            org.opencontainers.image.version=${{ steps.upstream.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.upstream.outputs.sha }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ steps.upstream.outputs.version }}
+
+      - name: Report result
+        if: always()
+        env:
+          RESULT: ${{ steps.published.outputs.skip }}
+        run: |
+          if [[ "$RESULT" == "true" ]]; then
+            echo "Already published: $IMAGE:${{ steps.upstream.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "${{ job.status }}" == "success" ]]; then
+            echo "Published $IMAGE:latest and $IMAGE:${{ steps.upstream.outputs.version }} (main @ ${{ steps.upstream.outputs.sha }})" >> "$GITHUB_STEP_SUMMARY"
+            echo "Upstream release merged: ${{ steps.upstream.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
