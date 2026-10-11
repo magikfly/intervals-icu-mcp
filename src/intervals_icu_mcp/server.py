@@ -772,14 +772,13 @@ if _DELETE_MODE == "full":
 @mcp.resource("intervals-icu://athlete/profile")
 async def athlete_profile_resource() -> str:
     """Complete athlete profile with fitness metrics and sport settings for context."""
+    # Load config directly since resources don't go through middleware, so the
+    # per-request header resolution of the multi-tenant patch has to happen here.
     from .auth import load_config
     from .client import ICUAPIError, ICUClient
+    from .middleware import resolve_config
     from .response_builder import ResponseBuilder
     from .sport_settings_format import format_sport_settings_entry
-
-    # Load config directly since resources don't go through middleware
-    from .auth import ICUConfig
-    from .middleware import resolve_config
 
     config = resolve_config(load_config())
 
