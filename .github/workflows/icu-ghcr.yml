@@ -40,6 +40,10 @@ jobs:
         id: upstream
         env:
           REQUESTED_TAG: ${{ inputs.tag }}
+          # Inherited from upstream and removed on this fork: its weekly schedule fires
+          # here too, but forks cannot open PRs, so every run just goes red after pushing
+          # a stray branch. Keep it gone across upstream merges.
+          DROP_FILE: .github/workflows/update-openapi.yml
         shell: bash
         run: |
           set -euo pipefail
@@ -60,9 +64,28 @@ jobs:
           if ! git merge-base --is-ancestor "refs/tags/$TARGET" HEAD; then
             echo "Merging upstream $TARGET into the patched branch"
             if ! git merge --no-edit "refs/tags/$TARGET"; then
-              git merge --abort 2>/dev/null || true
-              echo "::error title=Upstream merge conflict::upstream $TARGET conflicts with the multi-tenant patch (middleware.py, server.py, gear.py, sport_settings.py - see commit 6528502). Merge $TARGET into main by hand, push, and rerun. The last good image stays deployed."
-              exit 1
+              # If upstream edited $DROP_FILE the merge stops on a modify/delete
+              # conflict. Resolve it in favour of our deletion, but only when that
+              # file is the sole unmerged path - anything else still needs a human.
+              unmerged="$(git diff --name-only --diff-filter=U)"
+              n_all="$(printf '%s\n' "$unmerged" | grep -c . || true)"
+              n_drop="$(printf '%s\n' "$unmerged" | grep -Fxc -- "$DROP_FILE" || true)"
+              if [ "$n_all" -ge 1 ] && [ "$n_all" -eq "$n_drop" ]; then
+                echo "Keeping our deletion of $DROP_FILE (only conflict in this merge)"
+                git rm -f -q -- "$DROP_FILE"
+                git commit --no-edit
+              else
+                git merge --abort 2>/dev/null || true
+                echo "::error title=Upstream merge conflict::upstream $TARGET conflicts with the multi-tenant patch (middleware.py, server.py, gear.py, sport_settings.py - see commit 6528502). Merge $TARGET into main by hand, push, and rerun. The last good image stays deployed."
+                exit 1
+              fi
+            fi
+            # A merge that re-adds $DROP_FILE with no conflict succeeds silently, so
+            # enforce the removal after the merge too.
+            if [ -e "$DROP_FILE" ]; then
+              echo "Upstream re-added $DROP_FILE without conflict; removing it again"
+              git rm -f -q -- "$DROP_FILE"
+              git commit -q -m "ci: keep $(basename "$DROP_FILE") removed on the fork"
             fi
             git push origin "HEAD:refs/heads/main"
           else
