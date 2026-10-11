@@ -189,6 +189,18 @@ jobs:
           done
           echo "smoke /mcp http $code (406 = alive)"
           [ "$code" = "406" ]
+          # Run the image's own HEALTHCHECK command verbatim, no args, so the
+          # /proc/1/cmdline detection path is exercised too (upstream 7e0784b).
+          # The probe needs GET /health -> 200 {"status":"ok"} with no credentials
+          # in env; if that ever regresses in a merge, every deployed container goes
+          # unhealthy on its third probe, so catch it before publishing.
+          if ! docker exec icu-smoke python -m intervals_icu_mcp.healthcheck; then
+            echo "::error title=Image health probe failed::python -m intervals_icu_mcp.healthcheck exited non-zero against the booted server; container logs follow"
+            docker logs --tail 20 icu-smoke || true
+            docker rm -f icu-smoke
+            exit 1
+          fi
+          echo "smoke health probe ok"
           docker rm -f icu-smoke
 
       - name: Build and publish GHCR tags
