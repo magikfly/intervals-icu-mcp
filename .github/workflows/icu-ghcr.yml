@@ -2,7 +2,12 @@ name: Build and publish container image
 
 on:
   schedule:
-    - cron: "0 1 * * *" # daily 01:00 UTC: merges any new upstream release into main, finishes well before the 04:00 Europe/Amsterdam Watchtower poll (Strata 00:00, mnemory 00:30)
+    # 18:00 UTC = 20:00 Europe/Amsterdam. GitHub has been delivering the schedule event
+    # 5-6 h late for this repo (01:00 UTC cron actually started at 06:32-06:58 on 8-11 Oct),
+    # which put the old 01:00 slot AFTER the 04:00 Europe/Amsterdam Watchtower poll
+    # (02:00 UTC) and gave new images a ~1 day deploy lag. Starting in the evening leaves
+    # ~8 h of slack, so even a 6 h slip still lands before the poll.
+    - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
       tag:
@@ -40,10 +45,12 @@ jobs:
         id: upstream
         env:
           REQUESTED_TAG: ${{ inputs.tag }}
-          # Inherited from upstream and removed on this fork: its weekly schedule fires
-          # here too, but forks cannot open PRs, so every run just goes red after pushing
-          # a stray branch. Keep it gone across upstream merges.
-          DROP_FILE: .github/workflows/update-openapi.yml
+          # Inherited upstream workflows this fork must not run, kept deleted across
+          # upstream merges: update-openapi.yml opens PRs (a fork with the issue tracker
+          # disabled can only fail at that step), claude.yml drives the Claude Code action
+          # we never use, release.yml pushes images into the hhopke namespace and
+          # duplicates this build. Its test gate now runs as a step here.
+          DROP_FILES: .github/workflows/update-openapi.yml .github/workflows/claude.yml .github/workflows/release.yml
         shell: bash
         run: |
           set -euo pipefail
@@ -64,15 +71,19 @@ jobs:
           if ! git merge-base --is-ancestor "refs/tags/$TARGET" HEAD; then
             echo "Merging upstream $TARGET into the patched branch"
             if ! git merge --no-edit "refs/tags/$TARGET"; then
-              # If upstream edited $DROP_FILE the merge stops on a modify/delete
-              # conflict. Resolve it in favour of our deletion, but only when that
-              # file is the sole unmerged path - anything else still needs a human.
-              unmerged="$(git diff --name-only --diff-filter=U)"
-              n_all="$(printf '%s\n' "$unmerged" | grep -c . || true)"
-              n_drop="$(printf '%s\n' "$unmerged" | grep -Fxc -- "$DROP_FILE" || true)"
-              if [ "$n_all" -ge 1 ] && [ "$n_all" -eq "$n_drop" ]; then
-                echo "Keeping our deletion of $DROP_FILE (only conflict in this merge)"
-                git rm -f -q -- "$DROP_FILE"
+              # Resolve a conflict in one of the dropped workflows in favour of our
+              # deletion, but only when nothing else is unmerged: a real code conflict
+              # still needs a human and must not be swallowed.
+              resolved=0
+              blocked=0
+              for path in $(git diff --name-only --diff-filter=U); do
+                case " $DROP_FILES " in
+                  *" $path "*) git rm -f -q -- "$path" && resolved=$((resolved + 1)) ;;
+                  *) blocked=$((blocked + 1)) ;;
+                esac
+              done
+              if [ "$resolved" -ge 1 ] && [ "$blocked" -eq 0 ]; then
+                echo "Kept $resolved dropped workflow(s) deleted through the merge"
                 git commit --no-edit
               else
                 git merge --abort 2>/dev/null || true
@@ -80,13 +91,15 @@ jobs:
                 exit 1
               fi
             fi
-            # A merge that re-adds $DROP_FILE with no conflict succeeds silently, so
-            # enforce the removal after the merge too.
-            if [ -e "$DROP_FILE" ]; then
-              echo "Upstream re-added $DROP_FILE without conflict; removing it again"
-              git rm -f -q -- "$DROP_FILE"
-              git commit -q -m "ci: keep $(basename "$DROP_FILE") removed on the fork"
-            fi
+            # A merge that re-adds one of them without conflicting succeeds silently, so
+            # enforce the removal after the merge as well.
+            for path in $DROP_FILES; do
+              if [ -e "$path" ]; then
+                echo "Upstream re-added $path without conflict; removing it again"
+                git rm -f -q -- "$path"
+                git commit -q -m "ci: keep $(basename "$path") removed on the fork"
+              fi
+            done
             git push origin "HEAD:refs/heads/main"
           else
             echo "$TARGET is already merged; nothing new from upstream"
@@ -94,6 +107,30 @@ jobs:
           echo "version=$TARGET" >> "$GITHUB_OUTPUT"
           echo "pkg_version=${TARGET#v}" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11 and uv
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Lint, type-check and test before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same gate as upstream test.yml. Two reasons it lives here now: release.yml
+          # (the only path that ran it on main) is removed from this fork, and until now
+          # the image was published without a single test being run. Pinned to 3.11 to
+          # match python:3.11-slim in the Dockerfile. On failure the push step is skipped
+          # and the last good image stays deployed.
+          uv sync --frozen
+          uv run ruff check
+          uv run pyright
+          uv run pytest --cov=src/intervals_icu_mcp --cov-report=term-missing --cov-fail-under=80
 
       - name: Check multi-tenant patch is intact
         shell: bash
