@@ -14,6 +14,19 @@ that preserve the information (key renames, restructuring, added fields) ship in
 clients. (Releases up to and including 4.0.0 treated any response-shape change as
 breaking; this narrower contract applies from the next release onward.)
 
+## [5.7.1] — 2026-10-18
+
+### Fixed
+- `uvx intervals-icu-mcp` works on Intel Macs again without a compiler. cryptography (pulled in through fastmcp → authlib) ships only arm64 macOS wheels from 49.0.0 on, so uv fell back to building it from source, which needs Rust, OpenSSL and pkg-config. On x86_64 macOS the server now caps cryptography below 49, which still ships universal2 wheels. Every other platform is unchanged. cryptography 48.x has published advisories (PYSEC-2026-3552/3553/3554), but they cover PKCS#7 decryption and X.509 certificate verification, which this server never calls. The README now lists the official uv installer next to Homebrew, because Homebrew no longer installs on Intel Macs.
+
+## [5.7.0] — 2026-10-18
+
+### Fixed
+- The Docker image healthcheck no longer starts an MCP session and lists the full tool catalog every 30 seconds. It now runs `python -m intervals_icu_mcp.healthcheck`, a standard-library probe. For HTTP, streamable HTTP and SSE servers it sends `GET /health`, a new static route that returns `{"status":"ok"}` without touching MCP or Intervals.icu. For stdio servers it keeps the old import-only check. The probe finds the server's transport from the container's PID 1 command line. Behind a wrapper such as `docker run --init`, it falls back to the import check unless `--host`/`--port` are passed. The Docker timeout goes from 3 s to 5 s. `/health` is now reserved, so `--path /health` is rejected on HTTP transports. See `docs/remote-deployment.md` for compose examples. Contributed by @FabioCamin8 (#151).
+
+### Removed
+- `icu_apply_sport_settings` is retired, because Intervals.icu removed the endpoint behind it. The OpenAPI spec no longer lists `PUT /athlete/{id}/sport-settings/{id}/apply` (#157). Live, the route returns the same 404 as a path that never existed, while PUT-only routes that still exist return 405, so the tool failed on every call. This ships outside a major for the same reason as the `oldest_date` removal in #85: the tool could not work, so removing it breaks no working integration. To re-zone past activities, use Update zones in the Intervals.icu activity list view; the `icu_update_sport_settings` description now says so. Settings written with `icu_update_sport_settings` still apply to new activities as before. A rebuild on per-activity zone updates is tracked as a help-wanted follow-up (#159). The server goes from 70 tools to 69: `safe` (the default) from 67 to 66, `none` from 62 to 61 (closes #158).
+
 ## [5.6.0] — 2026-10-08
 
 ### Added
