@@ -59,7 +59,12 @@ from .tools.activity_analysis import (
     get_power_histogram,
     search_intervals,
 )
-from .tools.activity_messages import add_activity_message, get_activity_messages
+from .tools.activity_messages import (
+    add_activity_message,
+    delete_activity_message,
+    get_activity_messages,
+    update_activity_message,
+)
 from .tools.athlete import (
     get_athlete_profile,
     get_fitness_chart,
@@ -85,7 +90,7 @@ from .tools.event_management import (
     duplicate_events,
     update_event,
 )
-from .tools.events import get_calendar_events, get_event, get_upcoming_workouts
+from .tools.events import get_calendar_events, get_event, get_seasons, get_upcoming_workouts
 from .tools.gear import (
     create_gear,
     create_gear_reminder,
@@ -413,6 +418,15 @@ mcp.tool(
     },
 )(get_event)
 mcp.tool(
+    name="icu_get_seasons",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(get_seasons)
+mcp.tool(
     name="icu_get_annual_training_plan",
     annotations={
         "readOnlyHint": True,
@@ -717,6 +731,25 @@ mcp.tool(
         "openWorldHint": True,
     },
 )(add_activity_message)
+mcp.tool(
+    name="icu_update_activity_message",
+    annotations={
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(update_activity_message)
+if _DELETE_MODE in ("safe", "full"):
+    mcp.tool(
+        name="icu_delete_activity_message",
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )(delete_activity_message)
 
 # Register custom item tools
 mcp.tool(
