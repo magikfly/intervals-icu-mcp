@@ -24,6 +24,11 @@ on:
 permissions:
   contents: write
   packages: write
+  # workflows:write is required because this job pushes the upstream merge
+  # commit to main. GitHub rejects any GITHUB_TOKEN push that creates or updates a
+  # path under .github/workflows/ without it (seen 2026-10-31: upstream v5.8.0 added
+  # audit.yml and the push was remote-rejected in 13s).
+  workflows: write
 
 concurrency:
   group: icu-ghcr-build
@@ -50,7 +55,9 @@ jobs:
           # disabled can only fail at that step), claude.yml drives the Claude Code action
           # we never use, release.yml pushes images into the hhopke namespace and
           # duplicates this build. Its test gate now runs as a step here.
-          DROP_FILES: .github/workflows/update-openapi.yml .github/workflows/claude.yml .github/workflows/release.yml
+          # audit.yml (new in upstream v5.8.0) is their weekly pip-audit cron; the fork
+          # inherits the Makefile target and runs no second copy of it here.
+          DROP_FILES: .github/workflows/update-openapi.yml .github/workflows/claude.yml .github/workflows/release.yml .github/workflows/audit.yml
         shell: bash
         run: |
           set -euo pipefail
