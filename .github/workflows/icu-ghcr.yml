@@ -175,20 +175,29 @@ jobs:
           set -euo pipefail
           # Load-only build (no push): boots the real entrypoint with NO API key
           # in env, exactly like the production container (multi-tenant: keys
-          # arrive per-request as x-api-key headers). Boot + /mcp 406 proves
-          # packaging and runtime layout; header-based tenant resolution is
-          # exercised against the live container by verify_mcp.py post-deploy.
+          # arrive per-request as x-api-key headers). A successful MCP initialize
+          # handshake (HTTP 200 + serverInfo) proves boot, packaging and runtime layout;
+          # Tenant/header resolution is exercised post-deploy by verify_mcp.py.
           docker buildx build --load --platform linux/amd64 \
             --build-arg PKG_VERSION="$PKG_VERSION" -t icu-smoke .
           docker run -d --name icu-smoke -p 127.0.0.1:8000:8000 icu-smoke \
             --transport http --host 0.0.0.0 --port 8000
           for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/mcp || true)
-            [ "$code" = "406" ] && break
+            code=$(curl -s -m 6 -o /tmp/icu-init.txt -w '%{http_code}' -X POST \
+              http://127.0.0.1:8000/mcp \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"smoke","version":"0"},"capabilities":{}}}' || true)
+            grep -q serverInfo /tmp/icu-init.txt && [ "$code" = "200" ] && break
             sleep 1
           done
-          echo "smoke /mcp http $code (406 = alive)"
-          [ "$code" = "406" ]
+          echo "smoke /mcp initialize http $code (want 200 + serverInfo)"
+          if [ "$code" != "200" ] || ! grep -q serverInfo /tmp/icu-init.txt; then
+            echo "::error title=Smoke test failed::MCP initialize handshake did not return 200 + serverInfo; container logs follow"
+            docker logs --tail 30 icu-smoke || true
+            docker rm -f icu-smoke
+            exit 1
+          fi
           # Run the image's own HEALTHCHECK command verbatim, no args, so the
           # /proc/1/cmdline detection path is exercised too (upstream 7e0784b).
           # The probe needs GET /health -> 200 {"status":"ok"} with no credentials
