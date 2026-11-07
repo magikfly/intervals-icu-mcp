@@ -45,12 +45,21 @@ jobs:
         id: upstream
         env:
           REQUESTED_TAG: ${{ inputs.tag }}
+          # GITHUB_TOKEN can never push a commit that creates or updates a file
+          # under .github/workflows (pre-receive rejects it, and `workflows` is
+          # not a valid key in a permissions: block - GitHub 422s the parse).
+          # Upstream releases do edit their own workflows, so the merge push
+          # below uses a PAT with Workflows write when the secret is present.
+          # Same pattern as magikfly/mnemory (MERGE_PUSH_PAT, 2026-11-02).
+          MERGE_PUSH_PAT: ${{ secrets.MERGE_PUSH_PAT }}
           # Inherited upstream workflows this fork must not run, kept deleted across
           # upstream merges: update-openapi.yml opens PRs (a fork with the issue tracker
           # disabled can only fail at that step), claude.yml drives the Claude Code action
           # we never use, release.yml pushes images into the hhopke namespace and
-          # duplicates this build. Its test gate now runs as a step here.
-          DROP_FILES: .github/workflows/update-openapi.yml .github/workflows/claude.yml .github/workflows/release.yml .github/workflows/audit.yml
+          # duplicates this build. pr-title.yml enforces upstream's PR-title
+          # policy on a fork that has no pull requests. Its test gate now runs
+          # as a step here.
+          DROP_FILES: .github/workflows/update-openapi.yml .github/workflows/claude.yml .github/workflows/release.yml .github/workflows/audit.yml .github/workflows/pr-title.yml
         shell: bash
         run: |
           set -euo pipefail
@@ -100,7 +109,11 @@ jobs:
                 git commit -q -m "ci: keep $(basename "$path") removed on the fork"
               fi
             done
-            git push origin "HEAD:refs/heads/main"
+            if [ -n "${MERGE_PUSH_PAT:-}" ]; then
+              git push "https://x-access-token:${MERGE_PUSH_PAT}@github.com/magikfly/intervals-icu-mcp" "HEAD:refs/heads/main"
+            else
+              git push origin "HEAD:refs/heads/main"
+            fi
           else
             echo "$TARGET is already merged; nothing new from upstream"
           fi
