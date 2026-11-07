@@ -136,6 +136,9 @@ class SportSettings(BaseModel):
     pace_zones: list[float] = Field(default_factory=list[float])
     pace_zone_names: list[str] = Field(default_factory=list[str])
 
+    # Defaults for custom activity fields, keyed by field code (e.g. thresholds from a test)
+    custom_field_values: dict[str, Any] = Field(default_factory=dict[str, Any])
+
     @field_validator(
         "power_zones",
         "power_zone_names",
@@ -150,6 +153,11 @@ class SportSettings(BaseModel):
         # The API sends null (not []) for zone sets a sport doesn't use — e.g. a Run
         # record carries power_zones: null.
         return v or []
+
+    @field_validator("custom_field_values", mode="before")
+    @classmethod
+    def _coerce_custom_field_values(cls, v: Any) -> dict[str, Any]:
+        return v or {}
 
     @model_validator(mode="before")
     @classmethod
@@ -563,6 +571,9 @@ class CurveData(BaseModel):
     id: str | None = None
     label: str | None = None
     secs: list[int] = Field(default_factory=lambda: list[int]())
+    # Pace curves are distance-based: metres, with `values` the seconds to cover each one
+    # and no `secs` array. Power and HR curves are duration-based and leave this empty.
+    distance: list[float] = Field(default_factory=lambda: list[float]())
     values: list[int] = Field(default_factory=lambda: list[int]())
     activity_id: list[str] = Field(default_factory=lambda: list[str]())
     watts_per_kg: list[float] = Field(default_factory=lambda: list[float]())
@@ -579,6 +590,7 @@ class CurveData(BaseModel):
 
     @field_validator(
         "secs",
+        "distance",
         "values",
         "activity_id",
         "watts_per_kg",
@@ -665,12 +677,14 @@ class Interval(BaseModel):
 
     id: int | None = None
     type: str | None = None  # e.g., "WORK", "REST", "WARM_UP", "COOL_DOWN"
-    start: int | None = None  # Start time in seconds
-    end: int | None = None  # End time in seconds
-    duration: int | None = None  # Duration in seconds
+    start_time: int | None = None  # Seconds from the start of the activity
+    end_time: int | None = None  # Seconds from the start of the activity
+    elapsed_time: int | None = None  # Seconds, including stopped time
+    moving_time: int | None = None  # Seconds
     distance: float | None = None
+    total_elevation_gain: float | None = None  # Metres
     average_watts: int | None = None
-    normalized_power: int | None = None
+    weighted_average_watts: int | None = None  # Normalized power
     average_heartrate: int | None = None
     max_heartrate: int | None = None
     average_cadence: float | None = None

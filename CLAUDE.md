@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
-MCP (Model Context Protocol) server for Intervals.icu — provides up to 72 tools, 4 resources, and 9 prompts for accessing training data, wellness metrics, and performance analysis through Claude and other LLMs. The default `INTERVALS_ICU_DELETE_MODE=safe` registers 69 tools; `full` registers all 72, `none` registers 63.
+MCP (Model Context Protocol) server for Intervals.icu — provides up to 73 tools, 4 resources, and 9 prompts for accessing training data, wellness metrics, and performance analysis through Claude and other LLMs. The default `INTERVALS_ICU_DELETE_MODE=safe` registers 70 tools; `full` registers all 73, `none` registers 64.
 
 - **Language**: Python 3.11+
 - **Framework**: FastMCP
@@ -46,7 +46,7 @@ make docker/run       # Run Docker container
 ### Tool Categories
 
 1. `activities.py` — Query/manage activities
-2. `activity_analysis.py` — Streams, intervals, best efforts
+2. `activity_analysis.py` — Streams, stream window stats, intervals, best efforts
 3. `activity_messages.py` — Notes/comments on activities
 4. `athlete.py` — Profile, athlete notes, fitness metrics (CTL/ATL/TSB)
 5. `wellness.py` — HRV, sleep, recovery
@@ -100,7 +100,7 @@ The following skills are available in `.claude/skills/`:
 | `/commit` | Analyze changes and create conventional commits |
 | `/add-tool` | Step-by-step workflow for adding new MCP tools |
 | `/release-check` | Run pre-release verification and summarize results |
-| `/release-write` | Draft GitHub Release notes from CHANGELOG, tag, and publish |
+| `/release-write` | Preview the next version and generated notes, then dispatch the release workflow |
 
 ## Verification
 
@@ -108,21 +108,27 @@ The following skills are available in `.claude/skills/`:
 
 ## Merging PRs
 
-PRs are **squash-merged only** (repo setting: commit title from `PR_TITLE`, body `BLANK`). The PR title becomes the single `main` commit subject with ` (#N)` appended — write PR titles as single-line conventional commits (≤ ~70 chars), and edit non-conforming community PR titles before merging.
+PRs are **squash-merged only** (repo setting: commit title from `PR_TITLE`, body `BLANK`). The PR title becomes the single `main` commit subject with ` (#N)` appended — write PR titles as single-line conventional commits (≤ ~70 chars), and edit non-conforming community PR titles before merging. The title sets the version bump and is the raw input for the release notes (see Releases), so check the type (`feat` vs `fix`) and the `!` marker before merging.
 
 ## Releases
 
-CHANGELOG.md is **manual** — there is no automated changelog generation. Entries are the **maintainer's responsibility**: community PRs deliberately do not include them (CONTRIBUTING.md and the PR template say so, to avoid `[Unreleased]` merge conflicts and keep SemVer classification in one place). Add the `[Unreleased]` bullet at merge time, while the PR context is fresh; `/release-check` verifies every user-facing commit since the last tag has an entry before a release is cut. The only release-related automation:
-- Package version comes from the git tag via `hatch-vcs` (no `pyproject.toml` bump needed)
-- `publish.yml` syncs `server.json` version from the tag and publishes to PyPI + MCP Registry
-- `release.yml` builds and pushes the Docker image
+Releases are **cut on demand** (no fixed schedule) as a **draft first**: the workflow creates a draft GitHub Release, the notes are written into it, and the maintainer publishes it. `CHANGELOG.md` is **frozen at 5.8.0** and kept for history — never add entries to it; release notes live only in GitHub Releases. Because squash merges make each PR title the `main` commit subject, the PR title is the version-bump input, so getting the type right at merge time matters. `pr-title.yml` fails PRs whose title isn't a conventional commit.
 
-To cut a release:
-1. Rename `## [Unreleased]` → `## [X.Y.Z] — YYYY-MM-DD` in CHANGELOG.md
-2. Commit (e.g., `chore(release): X.Y.Z`)
-3. Tag and push: `git tag vX.Y.Z && git push origin main vX.Y.Z`
+Version bump, highest wins across everything merged since the last tag (`.github/scripts/next_version.py`):
+- `type!:` / `type(scope)!:` (or a `BREAKING CHANGE:` footer, which squash merges drop, so use `!`) → **major**
+- `feat` → **minor**
+- anything else → **patch**
 
-Follow SemVer with the narrowed contract defined in the CHANGELOG header. **Major** (breaking): removing or renaming a tool or tool parameter, changing config env var semantics, changing which tools register by default, or removing information from a response. **Minor**: response-shape changes that preserve the information (key renames, restructuring, added fields) — MCP responses are read dynamically by LLMs, not parsed by typed clients. Releases ≤ 4.0.0 predate this policy and treated any response-shape change as breaking.
+To cut a release, use `/release-write`. It previews the bump, dispatches the workflow, writes the notes into the draft, and hands the draft over. The two steps:
+1. **Dispatch** — Actions → Publish Release → Run workflow on `main` (or `gh workflow run publish.yml --ref main`, optionally `-f version=X.Y.Z`). `publish.yml` fails fast in `preflight` (requires `main`, checks the `server.json` description length, computes the version), runs the test suite, then `draft-release` creates a **draft** Release `vX.Y.Z` pinned to the tested commit, with generated PR-title notes as a placeholder. It refuses if a draft already exists. No tag, nothing published.
+2. **Publish** — the maintainer edits the notes (user-facing, 5.8.0 CHANGELOG style: follow-up PRs folded in, chores left out, contributors credited) and publishes the draft. That creates the tag and fires `release: published`, which runs `pypi` and `mcp-registry`. It must be a person's publish (UI or `gh release edit --draft=false` under the maintainer's login); a `GITHUB_TOKEN` publish triggers nothing. Never publish a draft without the maintainer's explicit go-ahead.
+
+Other release automation:
+- Package version comes from the git tag via `hatch-vcs` (no `pyproject.toml` bump needed, no release commit)
+- `publish.yml` syncs `server.json` version from the tag; a Release created by hand in the GitHub UI still publishes via its `release: published` trigger
+- `release.yml` builds and pushes the Docker image on every push to `main`
+
+Follow SemVer with the narrowed contract defined in CONTRIBUTING.md ("Versioning and release notes"). **Major** (breaking — title needs `!`): removing or renaming a tool or tool parameter, changing config env var semantics, changing which tools register by default, or removing information from a response. **Minor** (`feat`): response-shape changes that preserve the information (key renames, restructuring, added fields) — MCP responses are read dynamically by LLMs, not parsed by typed clients; retitle a `fix` that changes response shape to `feat`. Releases ≤ 4.0.0 predate this policy and treated any response-shape change as breaking.
 
 ### Deferred breaking changes (batch into the next major)
 
@@ -140,3 +146,5 @@ Running list of deferred breaking cleanups (do together in the next major; keep 
 - `uv.lock` — Locked dependencies (commit this)
 - `.github/workflows/test.yml` — CI tests
 - `.github/workflows/release.yml` — Docker release automation
+- `.github/workflows/publish.yml` — Cut a release on demand: dispatch creates a draft (version from PR titles); publishing it releases to PyPI + MCP Registry
+- `.github/workflows/pr-title.yml` — Enforces conventional-commit PR titles

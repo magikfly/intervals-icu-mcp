@@ -6,7 +6,7 @@
 
 A Model Context Protocol (MCP) server for Intervals.icu integration. Access your training data, wellness metrics, and performance analysis through Claude, ChatGPT, and other LLMs.
 
-> Originally based on [eddmann/intervals-icu-mcp](https://github.com/eddmann/intervals-icu-mcp) (MIT licensed). This project is an independent continuation with significant bug fixes and new features — see [CHANGELOG.md](https://github.com/hhopke/intervals-icu-mcp/blob/main/CHANGELOG.md) for details.
+> Originally based on [eddmann/intervals-icu-mcp](https://github.com/eddmann/intervals-icu-mcp) (MIT licensed). This project is an independent continuation with significant bug fixes and new features — see the [release notes](https://github.com/hhopke/intervals-icu-mcp/releases) for details.
 
 [![Tests](https://github.com/hhopke/intervals-icu-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/hhopke/intervals-icu-mcp/actions/workflows/test.yml)
 [![intervals-icu-mcp MCP server](https://glama.ai/mcp/servers/hhopke/intervals-icu-mcp/badges/score.svg)](https://glama.ai/mcp/servers/hhopke/intervals-icu-mcp)
@@ -16,7 +16,7 @@ A Model Context Protocol (MCP) server for Intervals.icu integration. Access your
 
 ## Overview
 
-72 tools spanning activities, activity analysis, activity messages, athlete profile, wellness, events/calendar, performance curves, workout library, gear, sport settings, and custom items — plus 4 MCP Resources (athlete profile, workout syntax, event categories, custom item schemas) and 9 MCP Prompts (training analysis, recovery check, weekly planning, and more). See [Available Tools](#available-tools) for the per-category breakdown.
+73 tools spanning activities, activity analysis, activity messages, athlete profile, wellness, events/calendar, performance curves, workout library, gear, sport settings, and custom items — plus 4 MCP Resources (athlete profile, workout syntax, event categories, custom item schemas) and 9 MCP Prompts (training analysis, recovery check, weekly planning, and more). See [Available Tools](#available-tools) for the per-category breakdown.
 
 ## Quick Start
 
@@ -214,12 +214,12 @@ For the full catalogue of example prompts by category, see [docs/examples.md](ht
 
 ## Available Tools
 
-72 tools, 4 resources, and 9 prompt templates. One-line summary below — full reference in [docs/tools.md](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md).
+73 tools, 4 resources, and 9 prompt templates. One-line summary below — full reference in [docs/tools.md](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md).
 
 | Category | Tools | Summary |
 |---|---|---|
 | [Activities](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#activities-13-tools) | 13 | Query, search, update, delete, download activities |
-| [Activity Analysis](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#activity-analysis-8-tools) | 8 | Streams, intervals, best efforts, histograms |
+| [Activity Analysis](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#activity-analysis-9-tools) | 9 | Streams, window stats, intervals, best efforts, histograms |
 | [Activity Messages](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#activity-messages-4-tools) | 4 | Read, post, edit, and delete notes/comments/coach feedback on activities |
 | [Athlete](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#athlete-5-tools) | 5 | Accessible athletes, profile and athlete notes, CTL/ATL/TSB analysis, fitness chart time-series |
 | [Wellness](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/tools.md#wellness-3-tools) | 3 | HRV, sleep, recovery metrics |
@@ -249,7 +249,7 @@ See [docs/remote-deployment.md](https://github.com/hhopke/intervals-icu-mcp/blob
 - [Architecture overview](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/architecture.md) — how the server, middleware, client, and tools fit together
 - [Remote deployment (HTTP/SSE)](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/remote-deployment.md) — transports, flags, and the security model for hosted/remote setups
 - [Testing guide](https://github.com/hhopke/intervals-icu-mcp/blob/main/docs/testing.md) — conventions for pytest + respx, fixtures, and running the suite
-- [Changelog](CHANGELOG.md) — release history
+- [Releases](https://github.com/hhopke/intervals-icu-mcp/releases) — release notes ([CHANGELOG.md](CHANGELOG.md) covers releases up to 5.8.0)
 - [Adding a new tool](https://github.com/hhopke/intervals-icu-mcp/blob/main/.claude/skills/add-tool/SKILL.md) — step-by-step workflow for contributors
 
 ## Feedback

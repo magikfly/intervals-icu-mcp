@@ -52,6 +52,7 @@ from .tools.activities import (
 from .tools.activity_analysis import (
     get_activity_intervals,
     get_activity_streams,
+    get_activity_window_stats,
     get_best_efforts,
     get_gap_histogram,
     get_hr_histogram,
@@ -249,6 +250,15 @@ mcp.tool(
         "openWorldHint": True,
     },
 )(get_activity_streams)
+mcp.tool(
+    name="icu_get_activity_window_stats",
+    annotations={
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)(get_activity_window_stats)
 mcp.tool(
     name="icu_get_activity_intervals",
     annotations={

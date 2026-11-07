@@ -1,180 +1,157 @@
 ---
 name: release-write
 description: |
-  Write release notes for a new version and cut the release.
-  Use when the user wants to ship a tagged release after merging
-  the release CHANGELOG commit. Produces a clean GitHub Release
-  body sourced from CHANGELOG.md, then tags + publishes.
-allowed-tools: Bash(git tag:*), Bash(git push:*), Bash(git log:*), Bash(gh release create:*), Bash(gh release view:*), Bash(sed:*), Bash(awk:*), Bash(cat:*), Read, Write
+  Cut a new release. Use when the user wants to ship a tagged release.
+  Previews the version bump from merged PR titles, dispatches the Publish Release
+  workflow (tests + draft GitHub Release), writes user-facing release notes into the
+  draft, and hands it to the maintainer to publish. Publishing the draft tags it and
+  publishes to PyPI + MCP Registry.
+allowed-tools: Bash(git fetch:*), Bash(git log:*), Bash(git describe:*), Bash(python3 .github/scripts/next_version.py:*), Bash(gh workflow run publish.yml:*), Bash(gh run list:*), Bash(gh run watch:*), Bash(gh run view:*), Bash(gh pr view:*), Bash(gh release view:*), Bash(gh release list:*), Bash(gh release edit:*), Bash(curl -s https://registry.modelcontextprotocol.io:*), Read, Write
 ---
 
 ## Context
 
-This repo's release path is half-manual:
+Releases are cut on demand (no schedule), in two steps. `CHANGELOG.md` is frozen at 5.8.0;
+release notes live only in GitHub Releases.
 
-| Step | Trigger | Workflow |
-|---|---|---|
-| Push `chore(release): X.Y.Z` to main | `push.branches: main` | `release.yml` → Docker build/push |
-| Push tag `vX.Y.Z` | (none) | nothing |
-| Create GitHub Release on the tag | `release.types: [published]` | `publish.yml` → PyPI + MCP Registry |
+**Step 1 — dispatch** (`.github/workflows/publish.yml`, `workflow_dispatch`):
 
-**Creating the GitHub Release is what actually triggers PyPI publish.** It is not optional. CHANGELOG.md is manual (per CLAUDE.md). This skill writes the GitHub Release body so users opening the Releases tab or the PyPI project page see polished notes, not raw commit history.
+| Job | Does |
+|---|---|
+| `preflight` | Fails fast: requires `main`, checks the `server.json` description is ≤ 100 chars, computes the version with `.github/scripts/next_version.py` (fails on "nothing to release") |
+| `test` | Full test suite (reusable `test.yml`) |
+| `draft-release` | Refuses if any draft release already exists, then creates a **draft** Release `vX.Y.Z` pinned to the tested commit, with GitHub's generated notes (PR titles) as a placeholder. No tag yet, nothing published |
 
-## Prerequisites
+**Step 2 — publish** (the maintainer publishes the draft → `release: published`):
 
-- The release commit (`chore(release): X.Y.Z`) is already on `origin/main` — i.e. CHANGELOG.md has been renamed from `[Unreleased]` to `[X.Y.Z] — YYYY-MM-DD`, committed, and pushed.
-- `make can-release` is green.
-- You are on `main`, up to date with `origin/main`.
-- **`server.json` `description` is ≤ 100 chars.** The MCP Registry rejects longer descriptions with HTTP 422 (`expected length <= 100`), failing the `mcp-registry` job *after* PyPI has already published — a partial release that's annoying to recover. Pre-flight check: `jq -r '.description | length' server.json`. If it's over 100, stop and get it trimmed on `main` first.
+| Job | Does |
+|---|---|
+| `pypi` | Builds at the new tag and publishes to PyPI |
+| `mcp-registry` | Syncs `server.json` to the tag version and publishes to the MCP Registry |
 
-If any prereq is missing, stop and tell the user what to do first.
+Version bump, highest wins across all commits since the last tag: `!` → major, `feat` → minor,
+anything else → patch. **Don't tag or create the release by hand**, and don't add a
+`chore(release)` commit.
+
+**Publishing is the maintainer's call.** Never publish the draft without the user's explicit
+go-ahead for that specific release. If they ask you to, use `gh release edit vX.Y.Z --draft=false`
+(it runs under their own login, so it triggers the publish jobs; a `GITHUB_TOKEN` publish would not).
 
 ## Instructions
 
-### 1. Extract the CHANGELOG section for this version
+### 1. Preflight
 
-Find the start line of `## [X.Y.Z]` and the start line of the *next* version section below it. Read everything in between, dropping the leading `## [...] — date` heading line (GitHub uses the release title instead).
+- On `main`, up to date with `origin/main`, tags fetched (`git fetch origin main --tags`).
+- `make can-release` is green (or run `/release-check`).
+- No draft release is pending: `gh release list --limit 5` (a leftover draft makes the
+  dispatch fail in `draft-release`; ask the user whether to publish or delete it).
 
-```bash
-# Example for v3.0.0:
-awk '/^## \[3\.0\.0\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md
-```
-
-Save the extracted body to a temp file (e.g. `/tmp/release-notes-X.Y.Z.md`).
-
-### 2. Reshape into the project's narrative style
-
-**Critical:** the release notes are NOT a copy of the CHANGELOG section. The CHANGELOG is the exhaustive source-of-truth; the release body is a curated headline version. Past releases in this repo (v2.0.0, v1.3.0, v1.2.0) follow a narrative style — read 1-2 of them before drafting to anchor on the existing voice:
+### 2. Preview the version
 
 ```bash
-gh release view vPREVIOUS --json body --jq .body
+python3 .github/scripts/next_version.py
+git log --oneline --no-merges "$(git describe --tags --abbrev=0 --match 'v[0-9]*')"..HEAD
 ```
 
-Adopt these conventions:
+Show the user the computed version and the bump each commit asks for. Flag:
 
-- **Title has a tagline:** `vX.Y.Z – Headline Theme` (not plain `vX.Y.Z`). Same theme you'd put in a tweet.
-  - **Default to one theme.** A second (`Theme One & Theme Two`) is allowed only when both are independently headline-worthy — the shape of v2.0.0 and v4.4.0. Don't reach for a second half to fill out the line; the best titles here are the single-theme ones (v4.3.2, v1.2.0). Aim for ≤ 45 chars including the `vX.Y.Z – ` prefix.
-  - **Name the user's benefit, in the user's vocabulary.** No repo-internal process terms — "deferred cleanups", "the drained list", milestone or issue-tracker names. A reader on the Releases tab has no referent for them, and they describe maintainer bookkeeping rather than anything the reader's data now does differently. If a phrase would only parse to someone who has read CLAUDE.md, it fails.
-  - **Breaking changes are not a headline theme.** Upgrade cost belongs in the `## Upgrading from vX.Y` section, not the title — even on a major.
-  - Keep the shape flat: a noun phrase, optionally two joined by `&`. No trailing appositives or comma clauses (`… & The Deferred Cleanups, Drained` is the failure case).
-- **Body uses narrative section headers**, not CHANGELOG-style category buckets. Examples from past releases: `## New features`, `## Improvements`, `## Notes`, or headline-named sections like `## Delete Safety Mode`. **DO NOT use `### Added / ### Fixed / ### Changed`** — that's CHANGELOG style; the release notes are different.
-- **Body fits a hard word budget** (see step 3). Never size the notes as a percentage of the CHANGELOG — a long CHANGELOG is exactly when the notes must stay short.
-- **Top callout (`> [!NOTE]`) only when there's a measured headline number** — token savings, accuracy gain, perf improvement. Skip for routine releases.
-- **Inline upgrade prose** for breaking changes — one or two sentences, no diff blocks. Pattern from v2.0.0: *"Upgrading from 1.x: \<thing> no longer \<behavior>. Set \<env var> to restore."* For multiple breaking changes, a `## Upgrading from vX.Y` heading with prose paragraphs (NOT diff snippets unless the consumer audience is parsing-heavy — see below).
-- **Single Full-Changelog comparison link at the bottom**, single line:
-  ```markdown
-  **Full Changelog:** https://github.com/<owner>/<repo>/compare/v<PREVIOUS>...v<CURRENT>
-  ```
-  This replaces a hand-curated PR list. Don't list PRs unless the user explicitly asks for it.
+- a non-conventional subject (counts as a patch);
+- a type that doesn't match the change: a user-facing addition or a response-shape change
+  titled `fix`/`chore` (should have been `feat`, so the bump is too small), or a breaking change
+  per CLAUDE.md without `!` (should be a major). Check the PR (`gh pr view N`) when the subject
+  alone is ambiguous. If the computed version is wrong, propose an explicit override.
 
-**MCP-specific framing for response-shape changes:**
+If `next_version.py` says there is nothing to release, stop.
 
-Per the narrowed SemVer contract (CHANGELOG header, adopted after 4.0.0), information-preserving response-shape changes (key renames, restructuring, added fields) are **minor**, not breaking. Only tool/parameter removals or renames, config env var semantic changes, default-registration changes, and removal of information from responses force a major. The reasoning:
-- MCP responses are consumed by LLMs that rephrase into natural language.
-- Programmatic parsers (`response["data"]["field"]`) are rare in MCP usage.
-- A field rename usually doesn't break user-visible behavior; the LLM adapts.
+### 3. Confirm, then dispatch
 
-When a release does include a breaking change — or a notable shape change worth flagging — keep the release-notes treatment proportional to the actual user impact: **one paragraph of inline upgrade prose, not an SDK-style Migration section with before/after diff blocks**. Diff blocks are for projects where consumers write typed parsing code; they're overkill here.
-
-Don't:
-- Rewrite the CHANGELOG verbatim. The CHANGELOG is comprehensive; the release notes are curated.
-- Use CHANGELOG section headings (`### Added`, etc.) — that's the wrong genre.
-- Add diff-snippet Migration sections for MCP response-shape changes — overkill for the audience.
-- Add emojis unless the user explicitly asks for them (per project convention).
-- Include co-author lines or AI attribution (per [feedback_commits.md] memory).
-
-### 3. Cut it down — mandatory, not optional
-
-Nobody reads long release notes. The first draft is always too long, because every fact
-feels load-bearing while you're holding the whole diff in your head. It isn't: the CHANGELOG
-is one click away and holds the evidence. **Run this pass every time, even when the draft
-already feels tight.**
-
-**Word budget** (body only, excluding the Full Changelog line) — measure it, don't estimate:
+Wait for the user's explicit go-ahead with the final version. Then:
 
 ```bash
-wc -w < /tmp/release-notes-X.Y.Z.md
+gh workflow run publish.yml --ref main                    # computed version
+gh workflow run publish.yml --ref main -f version=X.Y.Z   # explicit override
 ```
 
-| Release | Target | Hard ceiling |
-|---|---|---|
-| Patch (X.Y.**Z**) | ≤ 120 | 150 |
-| Minor (X.**Y**.0) | ≤ 250 | 300 |
-| Major (**X**.0.0, incl. upgrade section) | ≤ 350 | 400 |
-
-Historical anchors: v2.0.0 = 192 words, v3.0.0 = 415, v4.0.0 = 182. A major that lands at
-800 has failed this step. Per section: **one theme, ≤ 80 words**. More than four `##` sections
-means you're listing, not curating — merge or drop.
-
-**Over budget? Cut in this order** (each of these is CHANGELOG material, not release-notes material):
-
-1. **Second and third supporting measurements.** One number per section earns its place; the rest prove a case nobody is disputing while reading a release page.
-2. **Causal mechanism explained twice.** State the effect on the user, not the code path that produced it. "The model never declared the fields" is enough; the ordering of validation and response-building is not.
-3. **Provenance and design justification** — why the semantics were established a certain way, which bug class it resembles, what was deliberately *not* changed and why.
-4. **Sentences whose subject is the repo** rather than the user's data or tools ("This release drains…", "the list is now empty"). At most one, at the end.
-5. **Adjacent-fact "worth knowing" notes.** True, interesting, and the reason a reader stops reading.
-
-**Keep, always:** what broke, what it means for the reader's own data, the exact tool/field names to change, and the contributor credits.
-
-Then re-read the trimmed draft and ask: *does it still say the same thing?* If a cut lost
-information a user actually needs to act, restore that sentence — and take the words back
-out somewhere else, not from the budget.
-
-### 4. Show the polished notes to the user for review
-
-Print the contents of the temp file **and its word count against the budget** (e.g. "312 words,
-major budget 350"). The user may want to tweak before publishing. Wait for explicit go-ahead
-before step 5.
-
-### 5. Cut the release (only after user confirms)
+Start the watch in the background and write the notes (step 4) while the tests run:
 
 ```bash
-# Create the tag (no automation; just a marker)
-git tag vX.Y.Z
-git push origin vX.Y.Z
-
-# Create the GitHub Release using the polished notes file
-# This is what triggers publish.yml → PyPI + MCP Registry
-gh release create vX.Y.Z --title "vX.Y.Z – <tagline>" --notes-file /tmp/release-notes-X.Y.Z.md
+gh run watch "$(gh run list --workflow=publish.yml --event=workflow_dispatch --limit=1 --json databaseId --jq '.[0].databaseId')" --exit-status
 ```
 
-Do NOT use `--generate-notes` — that uses GitHub's auto-generated PR/commit list, which is noisier than what we just polished.
+If it fails, surface `gh run view <id> --log-failed` and stop. Nothing was tagged or
+published, so the fix is: fix on `main`, delete any draft it left, dispatch again.
 
-Do NOT use `--draft`. The release needs to be published to trigger `publish.yml`.
+### 4. Write the release notes
 
-### 6. Verify the release published correctly
+Gather every PR since the last tag. The ` (#N)` suffix on each `main` commit subject is the PR:
 
 ```bash
-gh release view vX.Y.Z --json url,tagName,publishedAt
+gh pr view N --json number,title,body,author,files,labels
 ```
 
-Report the URL to the user. Then watch the publish workflow to completion:
+Read the body, and the diff (`gh pr diff N`) when the body doesn't say what changed for a user.
+Then write the notes in the style of the last hand-written CHANGELOG entry (`CHANGELOG.md`, 5.8.0):
+
+```markdown
+## Breaking changes          ← only for a major; what breaks and how to migrate
+## Added
+- `icu_tool_name` does X for the user. Caveats/limits worth knowing. Contributed by @handle (#N).
+## Fixed
+- What was wrong, as the user saw it, and what happens now (#N).
+## Changed
+- ...
+
+This takes the server from A tools to B — `safe` (the default) from C to D, `none` from E to F.
+
+**Full Changelog**: https://github.com/hhopke/intervals-icu-mcp/compare/vPREV...vX.Y.Z
+```
+
+Rules:
+
+- **Describe the release as it ships, not the PR history.** Fold follow-up PRs ("apply review
+  feedback", renames, fix-ups of an unreleased feature) into the entry they change, citing all
+  PR numbers, and use the final tool/parameter names: check `server.py`, not the PR title.
+- **Write for a user of the server**, naming tools and parameters in backticks and saying what
+  they can now do or what was wrong. Not how the code changed.
+- **Leave out** what users don't notice: dependency bumps, CI, tests, refactors, OpenAPI spec
+  syncs. Keep ones that change behavior or support (Docker base image, Python versions,
+  a security fix) under Changed or Security.
+- **Credit external contributors** with "Contributed by @handle" (the PR `author.login`); not
+  the maintainer (`hhopke`) and not bots.
+- **Tool counts**: only when tools were added or removed. Count `name="icu_` in `server.py`
+  and use the per-mode numbers from CLAUDE.md.
+- Omit empty sections. No emojis, no AI attribution.
+
+Write the notes to a file in the scratchpad, show them to the user, and revise until they're
+happy. Once the run from step 3 has created the draft, upload them:
 
 ```bash
-gh run watch "$(gh run list --workflow=publish.yml --limit=1 --json databaseId --jq '.[0].databaseId')" --exit-status
+gh release edit vX.Y.Z --notes-file <path>
+gh release view vX.Y.Z --json url,isDraft
 ```
 
-`publish.yml` has **two jobs**: `pypi` then `mcp-registry` (`needs: pypi`). Watch **both** — the registry job can fail *after* PyPI has published, leaving a partial release (PyPI live, registry missing). Don't report success off the PyPI job alone.
+### 5. Hand off
 
-If it fails, surface the failure (`gh run view <id> --log-failed`) and stop — do not retry without user confirmation. Recovery notes:
-- **Registry-only failure (PyPI already up):** re-running the CI run won't help — it's pinned to the original tag commit. Either (a) fix the cause on `main`, force-move the tag, and delete+recreate the Release to re-fire the workflow (the `pypi` job has `skip-existing: true`, so it no-ops on the already-published version), or (b) publish to the registry manually: download `mcp-publisher` from `modelcontextprotocol/registry`, `jq` the release version into `server.json`, `./mcp-publisher login github` (interactive device flow), `./mcp-publisher publish`.
-- Confirm the registry entry landed: `curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=<pkg>" | jq '.servers[]?.version'`.
+Give the user the draft URL and tell them publishing it tags the commit and publishes to
+PyPI and the MCP Registry. Stop here unless they explicitly ask you to publish it (see Context).
 
-## Anti-patterns (don't do these)
+### 6. After publishing: watch both publish jobs
 
-- **Don't edit CHANGELOG.md from this skill.** The release commit is already on main; further edits create drift between the canonical changelog and the release body.
-- **Don't tag without pushing the release commit first.** Tagging an older commit means the published artifact references stale CHANGELOG.
-- **Don't auto-publish without showing the user the polished notes.** Even if the CHANGELOG looks fine, the polish step (TL;DR, PR list, migration guide) is judgment-based and the user should approve.
-- **Don't use `--draft` then forget to publish.** `publish.yml` only fires on `release.types: [published]`, not on draft creation.
-- **Don't generate "what's changed" via `--generate-notes` for a polished release.** That's GitHub's auto-listing; it's noisier and less narrative than the CHANGELOG section.
-- **Don't skip step 3 because the draft "reads well".** Well-written and too long are the same failure here — the draft always reads well to the person who just wrote it. Measure the word count; if it's over budget, cut.
-- **Don't let a big release justify a long body.** The reverse is true: the more that changed, the more selection the reader needs from you. A major with three themes gets three sections, not eight.
+```bash
+gh run watch "$(gh run list --workflow=publish.yml --event=release --limit=1 --json databaseId --jq '.[0].databaseId')" --exit-status
+```
 
-## Quality bar
+`mcp-registry` runs after `pypi` and can fail after PyPI has published, leaving a partial
+release — don't report success off the PyPI job alone. Confirm the registry entry:
 
-The release body should answer three questions for a reader scanning the Releases tab:
-1. **What changed at a glance?** — the callout, or the first section header.
-2. **What do I need to know to upgrade?** — the tool and field names to change, as prose or a short list.
-3. **Where did this come from?** — the Full Changelog comparison link.
+```bash
+curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=intervals-icu-mcp" | jq '.servers[]?.version'
+```
 
-If a reader can answer those without clicking into the CHANGELOG, the polish is sufficient — and anything beyond those three answers is a candidate for the cut pass. Avoid duplicating the CHANGELOG into a verbose PR list at the bottom; the comparison link is enough.
+Recovery after publishing: re-run the failed jobs of the same `release` run
+(`gh run rerun <id> --failed`). They reuse the tag, and `pypi` has `skip-existing: true`.
+Don't dispatch again: with no commits past the new tag it reports "Nothing to release". If the
+cause needs a code change, the tag must move: delete the Release and the tag, fix on `main`,
+and dispatch again. Don't retry anything without the user.
+
+Notes can still be corrected after publishing with `gh release edit vX.Y.Z --notes-file <path>`.

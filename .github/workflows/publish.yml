@@ -1,11 +1,122 @@
 name: Publish Release
 
+# Releases are cut on demand, in two steps:
+#
+# 1. Actions → Publish Release → Run workflow (on main). The version is derived from the
+#    PR titles merged since the last tag (.github/scripts/next_version.py). After the
+#    tests pass, this creates a DRAFT GitHub Release pinned to the tested commit, with
+#    GitHub's generated notes (the merged PR titles) as a starting point. No tag exists
+#    yet and nothing is published.
+# 2. The maintainer edits the draft's notes and publishes it. Publishing creates the tag
+#    and fires the `release: published` trigger, which runs `pypi` and `mcp-registry`.
+#
+# Step 2 must be done by a person (the GitHub UI, or `gh release edit --draft=false`
+# with the maintainer's own login): a release published with GITHUB_TOKEN does not
+# trigger workflows. A release created and published by hand also publishes through
+# the same trigger. PyPI trusted publishing is bound to this file, so both steps live here.
+#
+# If `pypi` or `mcp-registry` fails after publishing, re-run the failed jobs of that
+# `release` run: they reuse the tag, and `pypi` has `skip-existing: true`. Don't dispatch
+# again: with no commits past the new tag it reports "Nothing to release".
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version override (X.Y.Z). Leave empty to derive it from PR titles.'
+        required: false
+        default: ''
   release:
     types: [published]
 
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
 jobs:
+  # Cheap checks first, so a bad dispatch fails in seconds instead of after the
+  # full test matrix.
+  preflight:
+    name: Preflight
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
+    steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Releases are cut from main, not ${GITHUB_REF}."
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The MCP Registry rejects descriptions over 100 chars, and only after PyPI has
+      # published, leaving a partial release. Fail before anything is tagged.
+      - name: Check server.json description length
+        run: |
+          LEN=$(jq -r '.description | length' server.json)
+          if [ "$LEN" -gt 100 ]; then
+            echo "::error::server.json description is $LEN chars; the MCP Registry allows 100."
+            exit 1
+          fi
+
+      - name: Compute next version
+        id: version
+        env:
+          VERSION_OVERRIDE: ${{ inputs.version }}
+        run: python3 .github/scripts/next_version.py --version "$VERSION_OVERRIDE"
+
+  test:
+    name: Run Tests
+    needs: preflight
+    uses: ./.github/workflows/test.yml
+
+  draft-release:
+    name: Create draft GitHub Release
+    needs: [preflight, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The tag only exists once the draft is published, so a second dispatch would
+      # compute the same version and stack a second draft (or clobber hand-edited notes).
+      - name: Refuse if a draft already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DRAFTS=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 \
+            --json tagName,isDraft --jq '[.[] | select(.isDraft) | .tagName] | join(", ")')
+          if [ -n "$DRAFTS" ]; then
+            echo "::error::Draft release(s) already exist: $DRAFTS. Publish or delete them first."
+            exit 1
+          fi
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          PREVIOUS_TAG: ${{ needs.preflight.outputs.previous_tag }}
+        run: |
+          URL=$(gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes \
+            --notes-start-tag "$PREVIOUS_TAG")
+          {
+            echo "### Draft $TAG created"
+            echo
+            echo "Edit the notes, then publish: $URL"
+            echo
+            echo "Publishing creates the tag and runs the PyPI and MCP Registry jobs."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   pypi:
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -13,6 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.ref }}
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v7
       - run: uv build
@@ -22,16 +134,21 @@ jobs:
 
   mcp-registry:
     needs: pypi
+    if: needs.pypi.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
+    env:
+      TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
 
       - name: Sync server.json version to release tag
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${TAG#v}"
           jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' \
             server.json > server.json.tmp
           mv server.json.tmp server.json
